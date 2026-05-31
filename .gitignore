@@ -1,0 +1,30 @@
+# secrets
+.credentials.json
+*mcp*auth*
+*token*
+*secret*
+*credential*
+
+# runtime/cache
+cache/
+debug/
+downloads/
+sessions/
+session-env/
+shell-snapshots/
+projects/
+history.jsonl
+.last-cleanup
+
+# optional
+tasks/
+
+# already stored elsewhere
+settings.json
+CLAUDE.md
+skills
+
+
+backups/
+plugins/
+
