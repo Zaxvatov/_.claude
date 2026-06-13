@@ -1,14 +1,17 @@
 # Secure AI-Agent Platform — Hardening Phase 2
 
-> Статус: **draft / на согласовании**
+> Статус: **Phase 2 выполнен; план закрыт 2026-06-13**
 > Автор: Claude (Principal Security Architect / Staff Architect / Red Team / TPM)
 > Дата: 2026-06-11
-> PM-MCP: умбрелла будет создана после утверждения направления (предыдущая — #853, закрыта)
+> PM-MCP: #894 (umbrella, утверждён 2026-06-12). **P0/P1 закрыты (Готово 2026-06-12):** WP-A #895 (gateway), WP-B #896 (ai-memory+budget), WP-B2 #897 (ai-memory). **P2-пул заведён:** WP-C #899 (gateway, →#896), WP-D #900, WP-E #901, WP-F #902, WP-G1 #903 (gateway), WP-G2 #904 (assistant-ui). **P3-пул заведён** (по запросу пользователя, до закрытия P2): WP-H1 #905 (ai-memory), WP-H2 #906 (pm-mcp), WP-H3 #907 (budget) — все →#899; WP-I #908 (gateway, →#900); WP-J #909 (gateway, →#899); WP-K #910 (root, at-rest spike→ADR-0023, без блокера; ADR-0022 уже занят roadmap ADR). At-rest gate #912 и impl-задачи #913/#914 закрыты после SQLCipher POC и реализации ADR-0023. Предыдущая umbrella — #853 (закрыта).
 > Предшественник: `DONE/secure-agent-platform-hardening.md` (#853, P0/P1 реализованы коммитом `a620947`)
-> Связанные ADR: ADR-0018 (owner-auth), ADR-0019 (service identity layer); кандидаты ADR-0020 (**signed short-lived service token** + backend enforcement parity), ADR-0021 (multi-tenant principal), ADR-0022 (data-at-rest)
+> Связанные ADR: ADR-0018 (owner-auth), ADR-0019 (service identity + signed service token/backend parity), ADR-0024 (multi-tenant principal/storage boundary), ADR-0023 (data-at-rest; ADR-0022 занят roadmap ADR)
 > Codex review round 1 (2026-06-12) учтён: §5 F-3R evidence, §5.1 surface matrix, §5.2 token model, WP-A (оба start-path), WP-C вне P1-критпути, §4 bricks, WP-K at-rest spike, §10.1 rollout checklist, §11 regression. Proposal #16.
 > Codex review round 2 (2026-06-12) учтён: §5.2 delivery-модель (editable пакет) + mint/refresh + **asymmetric Ed25519 broker** (claims неподделываемы), §5.1 ai-memory `/openapi`, §5.2 разбиение scopes, WP-H разложен по БД, WP-K факторы spike. Proposal #17.
 > Codex review round 3 (2026-06-12) учтён: §5.3 (broker собственная авторизация + caller-registry + owner-scope→owner-auth + key/registry integrity + крипто-профиль EdDSA-only), WP-B OpenAPI positive-path, §10.2 rollback, WP-C — отдельный shared package. Proposal #18.
+> Codex review round 4 (2026-06-12) учтён: WP-B2 миграция `ai-memory-proposals :8770` на Ed25519, WP-A route/tool-level scope enforcement в pm-mcp, WP-A per-caller credential/envelope-registry как deploy-артефакт на обоих start-path, WP-H global `#NNN` сохраняются (ADR-0003, tenant ограничивает видимость). Proposal #19.
+> Codex review round 5 (2026-06-12) учтён: WP-B2 явно **удаляет OAuth mini-surface proposals-демона** (`/.well-known/*`,`/authorize`,`/token`,HS256), WP-A pm-mcp route-scope **regression-тесты**, §10/§11 включают WP-B2, явные provisioning-тесты (per-caller credentials + `service-callers.json`). Proposal #20.
+> Codex review round 6 (2026-06-12) учтён: surface matrix `/events` Ed25519+`pm.read` и отдельная строка OAuth :8770 (target removed/404), §10.1 rollout WP-B2 (propose=200, direct :8770=401, OAuth=404), §10.2 rollback включает :8770. Proposal #20.
 > Решения пользователя (2026-06-12): (1) **подписанные короткоживущие service-токены сразу**; (2) **полный объём P3**; (3) **mint-брокер на gateway + asymmetric Ed25519** (бэкенды только verify public-key) для неподделываемых claims и refresh.
 
 ---
@@ -82,7 +85,7 @@ Track B), #19 (pwsh7), #22 (secrets keyring-first), #23 (external ingress auth),
 - candidate **#28** — claims-based central policy `decide()` — после WP-C.
 - candidate **#29** — tamper-evident audit (serialized writer + external/WORM anchor) — после WP-D.
 - candidate **#30** — security monitoring/alerting (denied/rate/new-client thresholds) — после WP-I.
-- candidate **#31** — data-at-rest pattern (по выбору spike) — после WP-K/ADR-0022.
+- candidate **#31** — data-at-rest pattern (по выбору spike) — после WP-K/ADR-0023 и реализации #912/#913/#914.
 - candidate **#32** — JWT/crypto-профиль (`PyJWT[crypto]`+`cryptography`, EdDSA-only allowlist,
   запрет `none`/key-confusion, строгий `iss/aud/iat/exp/kid`) — после WP-A; обновляет brick #23
   (там сейчас hand-rolled HS256 `auth.py`).
@@ -111,11 +114,13 @@ Track B), #19 (pwsh7), #22 (secrets keyring-first), #23 (external ingress auth),
 | pm-mcp :8766 | `/mcp-streamable/*` | opaque bearer ✅ | **Ed25519 token (claims)** — миграция |
 | pm-mcp :8766 | `/internal/calendar/notify` | bearer ✅ (middleware) | Ed25519 token, scope `internal.write` |
 | pm-mcp :8766 | `/openapi/*` (OWUI) | opaque bearer ✅ | Ed25519 token; **regression на auth** |
-| pm-mcp :8766 | `/health`, `/events` | `/health` public; `/events` bearer | без изменений |
+| pm-mcp :8766 | `/health` | public | без изменений |
+| pm-mcp :8766 | `/events` (SSE) | bearer | **Ed25519 + `pm.read`** (Codex r6) |
 | **ai-memory :8765** | `/mcp` | **нет auth ❌** | **Ed25519 token (`memory.*`) + DNS-rebinding** |
 | **ai-memory :8765** | `/openapi/*` (bridge) | **нет auth ❌** | **Ed25519 token + regression** (Codex r2; `openapi_bridge.py`, `daemon.py`) |
 | ai-memory :8765 | `/healthz` (опц.) | public | health-only (без claims) |
 | ai-memory-proposals :8770 | `/mcp` | ad-hoc token + rebinding ✅ | мигрировать на Ed25519 (scope `memory.propose`) |
+| ai-memory-proposals :8770 | `/.well-known/*`, `/authorize`, `/token` (OAuth+HS256) | собственный OAuth-сервер ⚠️ | **target: removed/404** (WP-B2, Codex r6) |
 | **budget :8767** | `/mcp` | **нет auth ❌** | **Ed25519 token (`budget.*`) + DNS-rebinding** |
 | assistant-ui :8000 | `/api/*`, страницы | cookie/bearer, localhost-GET выдаёт cookie | fail-closed (N-7) |
 | gateway :8780 | внешний surface | Phase 1 ✅ | hardening (N-2…N-6,N-8,N-11) |
@@ -198,11 +203,19 @@ caller-registry под **owner-only write ACL**; verifier пинит fingerprint
   библиотека `PyJWT[crypto]`+`cryptography`, `alg` EdDSA-only, запрет `none`/key-confusion.
 - **Миграция pm-mcp**: заменить opaque `verify_authorization_header` (`auth.py:30-36`) на
   `service_identity.verify(audience="pm-mcp", public_key=...)`. Старый opaque-путь удалить.
+- **Route/tool-level scope в pm-mcp (Codex r4 п.2)** — `aud=pm-mcp` недостаточно (слишком широко):
+  `/internal/calendar/notify` → `internal.write`; MCP tools и `/openapi` → per-tool `pm.read`/
+  `pm.action` (read vs write/approve); `/events` (SSE) → `pm.read`. Backend проверяет scope claim
+  против карты route/tool, а не только `aud`.
 - **Клиенты — refreshing provider (Codex r2 п.2)**: `assistant-ui/app/mcp_client.py` (статичный
   bearer :616) → провайдер, который минтит/обновляет токен у брокера перед `exp`. Локальные
   агенты (Claude/Codex) — токен от брокера, не из файла.
 - **Провижн на обоих путях**: и `register_services.ps1`, и `run-user-session.ps1` раздают
   приватный ключ только gateway, публичный — бэкендам/клиентам; настраивают broker-URL.
+- **Per-caller credential + envelope-registry как deploy-артефакт (Codex r4 п.3)** — НЕ только
+  модель из §5.3: оба регистратора создают per-caller bootstrap-credential (ACL-restrict) для
+  gateway-internal/`assistant-ui`/локальных агентов и материализуют envelope-registry
+  (`.secrets/service-callers.json`, owner-only) с разрешёнными `aud`/`sub`/`scopes` на каждого caller.
 - **warn→enforce флаг** в каждом верификаторе (ADR-0019 §3): warn — verify+redacted-log;
   enforce — 401/403. Дефолт warn до подтверждения провижна.
 - Acceptance: keypair создан с restrict-ACL (приватный только у gateway); рестарт **обоими**
@@ -242,6 +255,27 @@ caller-registry под **owner-only write ACL**; verifier пинит fingerprint
   `test_backend_wrong_audience_rejected`, `test_backend_dns_rebinding_rejected`,
   `test_direct_store_memory_denied_without_owner_scope`.
 
+**WP-B2 — Миграция `ai-memory-proposals :8770` на Ed25519 (Codex r4 п.1).** Subsystem: `ai-memory`.
+- Сейчас :8770 уже аутентифицирован ad-hoc shared-token + DNS-rebinding (`proposals/app.py:433`),
+  gateway реально ходит туда для `/memory/propose` (`backends.py` target `ai_memory_proposals`).
+  Мигрировать на `service_identity.verify(audience="ai-memory-proposals")`, scope `memory.propose`;
+  старый shared-token удалить (migration discipline). Gateway-клиент
+  `ai_memory_proposals_bearer_token` → Ed25519.
+- **РЕШЕНИЕ по OAuth mini-surface proposals-демона (Codex r5 п.1) — УДАЛИТЬ.** На :8770 есть
+  собственный OAuth-сервер: `/.well-known/oauth-authorization-server`,
+  `/.well-known/oauth-protected-resource`, `/authorize`, `/token`, HS256 `_issue_access_token`/
+  `_verify_hs256_jwt`, legacy-bearer (`ProposalsAuthMiddleware` `app.py:315-354`, `:300-312`).
+  Под ADR-0001 gateway — единственный ingress, :8770 loopback-only/вне Funnel, а gateway
+  аутентифицируется bearer'ом (→Ed25519), НЕ через этот OAuth-флоу → surface избыточен.
+  Удалить все перечисленные роуты + HS256 issue/verify + legacy-bearer; оставить только
+  Ed25519-verify (WP-B2) + health/ready. Reversibility: если найдётся прямой OAuth-консьюмер
+  (сейчас не существует — surface не достижим извне), пересмотреть.
+- Acceptance: `/memory/propose` через gateway работает на Ed25519; старый shared-token и
+  **OAuth-роуты (`/authorize`,`/token`,`/.well-known/*`) мертвы (404/удалены)**.
+- Тесты: `test_proposals_requires_ed25519_token`, `test_proposals_propose_scope_enforced`,
+  `test_proposals_old_shared_token_dead`, `test_proposals_oauth_surface_removed`,
+  `test_proposals_hs256_path_removed`.
+
 **WP-C — перенесён в P2** (shared claims-based policy; см. ниже). Причина: не блокировать
 fail-closed backend (WP-B) на policy-архитектуре.
 
@@ -263,14 +297,15 @@ fail-closed backend (WP-B) на policy-архитектуре.
 ### P3 — Стратегическое (полный объём — реализация, решение пользователя)
 
 - **WP-H** Multi-tenant `tenant_id` (N-10) — разложено по БД (Codex r2 п.6), НЕ «просто колонка».
-  Реализует **существующий forward кирпичика #3** (нового brick не нужно). ADR-0021. Для КАЖДОЙ БД:
+  Реализует **существующий forward кирпичика #3** (нового brick не нужно). ADR-0024. Для КАЖДОЙ БД:
   - колонка `tenant_id` + индексы под актуальные query-паттерны (composite с существующими фильтрами);
   - backfill `self` (idempotent миграция, `schema_version` bump);
   - **query filters**: каждый read/write-путь фильтрует по `principal.tenant_id` (не только колонка);
   - **unique constraints** пересмотреть на `(tenant_id, ...)` где уникальность была глобальной;
   - **memory.db**: FTS5 rebuild с учётом tenant; lineage/graph-рёбра в пределах tenant;
-  - **tasks (pm-mcp)**: global task-id ADR-0003 — решить, `#NNN` глобальный или per-tenant
-    (последствия для cross-ref, dependency-links, gateway `pm_get_work_item`); goals-дерево per-tenant;
+  - **tasks (pm-mcp)**: **global `#NNN` СОХРАНЯЮТСЯ** (ADR-0003 + AGENTS — не переоткрывать;
+    Codex r4 п.4). `tenant_id` ограничивает только видимость/запросы/связи (cross-ref и
+    dependency-links валидны лишь внутри tenant), счётчик остаётся глобальным; goals-дерево per-tenant;
   - **budget.db**: ledger/accounts/FX per-tenant, проверка инвариантов балансов после backfill;
   - **calendar**: watch-channels/sync-state per-tenant.
   - **Acceptance — отдельный per-БД** (`test_<db>_tenant_isolation`, `test_<db>_backfill_self_idempotent`,
@@ -291,7 +326,7 @@ fail-closed backend (WP-B) на policy-архитектуре.
   - поведение при **недоступном keyring** (fail-closed vs degraded read-only vs отказ старта);
   - модель угроз: live-compromise (шифрование не спасает) vs диск-at-rest/кража носителя (спасает);
   - **критерий выбора** механизма (что именно склоняет к SQLCipher vs EFS/BitLocker vs field-level).
-  → **ADR-0022** с выбором → реализация (ключи в secrets-слое; миграция БД с verify целостности). → candidate brick #31.
+  → **ADR-0023** с выбором (ADR-0022 уже занят) → implementation tasks #912 (root key contract/SQLCipher POC/runbook), #913 (ai-memory memory.db), #914 (budget budget.db); ключи в secrets-слое; миграция БД с verify целостности. → candidate brick #31.
 
 ## 7. Недостающие компоненты (кирпичики)
 
@@ -305,7 +340,7 @@ fail-closed backend (WP-B) на policy-архитектуре.
 | MC-F | Security monitoring / alerting | P3 | детект |
 | MC-G | Multi-tenant partitioning (tenant_id, реализация) | P3 | N-10 |
 | MC-H | External-MCP / delegated-agent sandbox (реализация) | P3 | delegated/external |
-| MC-I | Data-at-rest encryption (spike→ADR-0022→реализация) | P3 | budget.db/memory.db |
+| MC-I | Data-at-rest encryption (spike→ADR-0023→#912/#913/#914 реализация) | P3 | budget.db/memory.db |
 
 ## 8. Архитектурная эволюция (закладываем сейчас)
 
@@ -337,16 +372,19 @@ fail-closed backend (WP-B) на policy-архитектуре.
 - [ ] P1: ai-memory :8765 (**оба mount /mcp и /openapi**) и budget :8767 fail-closed
       (Ed25519 + per-service scope) + DNS-rebinding; прямой `store_*` без `memory.write.internal`+owner
       отклонён; неверный `aud` отвергнут; **WP-B не блокирован WP-C**.
+- [ ] P1 (WP-B2): `ai-memory-proposals :8770` на Ed25519 (`memory.propose`), `/memory/propose`
+      через gateway работает, **OAuth mini-surface + HS256 + legacy-bearer удалены**; pm-mcp
+      route-scope enforced (`internal.write`/`pm.read`/`pm.action` по route/tool, не только `aud`).
 - [ ] P2: claims-based `decide()` в бэкендах; audit без сырых тел/заголовков + tamper-evident;
       pre-parse caps; webhook/UI/secret фиксы (N-6/N-7/N-8/N-11).
 - [ ] P3 (полный объём): `tenant_id` сквозной + backfill `self`; sandbox внешних MCP;
-      at-rest реализован по ADR-0022 (после spike).
-- [ ] ADR-0020 (signed service token) / ADR-0021 (multi-tenant) / ADR-0022 (at-rest) написаны;
+      at-rest ADR зафиксирован как ADR-0023; реализация вынесена в #912/#913/#914 после SQLCipher POC.
+- [ ] ADR-0019 (signed service token) / ADR-0024 (multi-tenant) / ADR-0023 (at-rest; ADR-0022 занят) написаны;
       ADR-0019 расширен surface-matrix §5.1.
 - [ ] Docs-sweep: ARCHITECTURE/README бэкендов не называют loopback security boundary;
       grep `без auth`/`trust-by-default`/`loopback` чист (brick #5 уже синхронен — не трогаем).
-- [ ] Rollout checklist (§10.1) пройден; Security regression suite (§11) зелёный.
-- [ ] Candidate bricks #27–#31 промоутятся только после landing+evidence (с подтверждением).
+- [ ] Rollout checklist (§10.1) пройден; **rollback-процедура (§10.2) отрепетирована** (enforce→warn без возврата к opaque); Security regression suite (§11) зелёный.
+- [ ] Candidate bricks #27–#32 промоутятся только после landing+evidence (с подтверждением).
 - [ ] Per-WP work items заведены по subsystem (absolute `project_path` через `list_projects`) с `link_task_dependency`.
 
 ## 10.1 Rollout checklist (обязателен перед enforce; добавлено по Codex)
@@ -355,6 +393,8 @@ fail-closed backend (WP-B) на policy-архитектуре.
 - [ ] smoke `gateway → pm-mcp/ai-memory/budget` **с** валидным signed-токеном = 200.
 - [ ] smoke `assistant-ui → pm-mcp` **с** токеном = 200 (оба start-path: NSSM и logon).
 - [ ] negative: тот же вызов **без** токена = 401 (не 503, не pass) на :8765/:8766/:8767.
+- [ ] **WP-B2 (Codex r6)**: smoke `gateway → /memory/propose` с Ed25519 = 200; direct :8770
+      без токена/со старым shared-token = 401; OAuth-роуты на :8770 (`/authorize`,`/token`,`/.well-known/*`) = 404.
 - [ ] warn-фаза: warn-лог redacted и **пуст** (никто не ходит без токена) перед enforce.
 - [ ] env/task fingerprints совпадают на NSSM и logon-path, **без вывода значений секретов**.
 
@@ -364,11 +404,13 @@ fail-closed backend (WP-B) на policy-архитектуре.
 только enforce→warn в рамках Ed25519:
 1. Переключить флаг каждого бэкенда `enforce → warn` (env/flag list: `*_S2S_ENFORCE=0`),
    токены продолжают verify, но отсутствие/невалидность не блокирует — трафик восстановлен.
-2. Порядок рестарта: бэкенды (:8765/:8767/:8766) → gateway-брокер; проверить **fresh PID**
-   каждого (id 1529) и пустой error-лог.
-3. Smoke: gateway→каждый бэкенд и ui→pm-mcp с валидным токеном = 200; затем диагностировать причину.
+2. Порядок рестарта: бэкенды (:8765/**:8770**/:8767/:8766) → gateway-брокер; проверить **fresh PID**
+   каждого (id 1529) и пустой error-лог. **Не забыть proposals :8770** (Codex r6).
+3. Smoke: gateway→каждый бэкенд (включая `/memory/propose` на :8770) и ui→pm-mcp с валидным
+   токеном = 200; затем диагностировать причину.
 4. Если скомпрометирован ключ — ротация `kid` (active/previous), а не откат к warn.
-- Тест: `test_enforce_to_warn_rollback_keeps_ed25519` (откат не реактивирует opaque-путь).
+- Тесты: `test_enforce_to_warn_rollback_keeps_ed25519` (откат не реактивирует opaque-путь),
+  `test_rollback_includes_proposals_daemon` (:8770 в порядке рестарта и smoke).
 
 ## 11. Security regression suite (red-team, Phase 2)
 
@@ -394,16 +436,47 @@ fail-closed backend (WP-B) на policy-архитектуре.
 - `test_request_cap_before_parse` — body-cap срабатывает ДО парсинга JSON.
 - `test_assistant_ui_fail_closed_without_token`, `test_localhost_get_no_session_cookie` — N-7.
 - `test_previous_secret_not_from_env` — N-8.
+- **pm-mcp route-scope (Codex r5 п.2)**: `test_pm_calendar_notify_requires_internal_write`,
+  `test_pm_events_requires_pm_read`, `test_pm_read_tool_denied_with_only_pm_action`,
+  `test_pm_action_tool_denied_with_only_pm_read`.
+- **WP-B2 proposals (Codex r5 п.3)**: `test_proposals_propose_via_gateway_ed25519`,
+  `test_proposals_old_shared_token_dead`, `test_proposals_wrong_scope_rejected`,
+  `test_proposals_oauth_surface_removed`, `test_proposals_hs256_path_removed`.
+- **Provisioning (Codex r5 п.4)**: `test_registrar_provisions_caller_credentials`,
+  `test_envelope_registry_materialized_both_paths` (per-caller creds + `.secrets/service-callers.json`
+  на NSSM и logon).
 - `test_tenant_isolation` — principal tenant A не видит rows tenant B.
 
+## 12. Статус реализации (2026-06-12, Codex)
+
+- PM-MCP #895 (WP-A): реализованы `service_identity` editable-пакет, Ed25519 service-токены, провижн обоих start-path, миграция pm-mcp на signed-token verify и route/tool-scope enforcement.
+- PM-MCP #896 (WP-B): реализован Ed25519 verify parity для `ai-memory` :8765 и `budget` :8767, включая `/mcp`, `/openapi`, per-service scopes и DNS-rebinding protection.
+- PM-MCP #897 (WP-B2): `ai-memory-proposals` :8770 переведён на Ed25519 `memory.propose`; legacy shared-token, HS256 и OAuth mini-surface удалены.
+- Проверки зелёные: `service_identity` pytest; `gateway` unittest; `pm-mcp-server` pytest; `ai-memory` unittest; `budget` pytest; `assistant-ui` pytest; `ruff check .` во всех затронутых Python-подсистемах.
+- План закрыт: P0/P1/P2/P3 (`WP-A…WP-K`) и follow-up #912/#913/#914 в PM-MCP имеют статус `Готово`; ADR-0023 и runbook обновлены; outcome записан в AI-memory.
+
+Pre-close engineering retrospective:
+
+| Axis | Verdict | Note |
+|---|---|---|
+| `tech-stack-choices.md` | follow-up-task | Возник reusable pattern `service_identity`/Ed25519 service tokens; создан PM-MCP #898 на согласование промоута brick'а. |
+| Design-system | no-change | UI/дизайн-система не затрагивались. |
+| Skills | no-change | Повторяемый workflow не требует нового skill сверх текущих `central-plan-workflow`, `pm-mcp-task-flow`, `ai-memory-capture`. |
+| Hooks | no-change | Новый детерминированный guard/hook не выявлен. |
 ## References
 
 - Предшественник: `DONE/secure-agent-platform-hardening.md` (#853), коммит `a620947`.
-- ADR-0018 owner-auth, ADR-0019 service identity layer; кандидаты ADR-0020 (signed token),
-  ADR-0021 (multi-tenant), ADR-0022 (at-rest, после spike).
-- Codex review «новой редакции» (2026-06-12) — AI-memory proposal #16 (direct `store_memory_batch`
-  был заблокирован guard'ом формата batch-входа).
+- ADR-0018 owner-auth, ADR-0019 service identity layer / signed token,
+  ADR-0024 (multi-tenant), ADR-0023 (at-rest, после spike; ADR-0022 занят roadmap ADR).
+- Codex review «новой редакции» (2026-06-12), раунды 1–6 — AI-memory proposals #16–#20
+  (round 1 #16; round 2 #17; round 3 #18; round 4 #19; rounds 5–6 #20). #16: direct
+  `store_memory_batch` был заблокирован guard'ом формата batch-входа.
 - AI-memory: id 1654 (Funnel loopback ≠ identity), 1660 (#858/#859/#863/#865 closed),
   1630 (DCR scope иммутабелен), 1529 (Running ≠ свежий PID), 1629 (logon-task start-path).
 - Tech-stack: bricks #3 (tenant_id forward, line 48), #5 (loopback≠trust, lines 64-65),
   #22/#23/#24/#26 (`_engineering_rules/tech-stack-choices.md`).
+
+
+
+
+

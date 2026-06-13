@@ -1,6 +1,6 @@
 # Roadmap: реальная ось времени, даты у задач/целей (drag-reschedule) и подключение Google-календаря
 
-**PM-MCP work item:** #843 (project `D:\GitHub\AI-Assistant`, в работе, goal `portfolio-control-plane`, заголовок синхронизирован с моделью). Статус: ЧЕРНОВИК v2 (учтён read-only review Codex), согласуем.
+**PM-MCP work item:** #843 (epic, project `D:\GitHub\AI-Assistant`, goal `portfolio-control-plane`). Статус: **УТВЕРЖДЁН 2026-06-12** (3 раунда read-only review Codex закрыты). Декомпозиция на WP — см. Post-approval.
 
 ## Context
 
@@ -105,7 +105,17 @@
 - **Lint (gate по AGENTS):** `cd pm-mcp-server; uv run ruff check .` и `cd assistant-ui; uv run ruff check .` — чисто (для затронутых подсистем).
 
 ## Post-approval (вне plan mode)
-- Разбить #843 на под-задачи A0–A5 / B1–B4 с зависимостями; id вписать сюда.
+- **WP-пул создан 2026-06-12** (assignee codex, goal `portfolio-control-plane`, эпик #843):
+  - A0 #884 (ADR) → A1 #885 (schema+контракт+guard) → A2 #886 (read-model) → A3 #887 (ось/frontend) → A4 #888 (редактор+PATCH; ← #885,#887) → A5 #889 (drag; ← #888).
+  - B1 #890 (sources+`visible_on_roadmap`) → B3 #892 (панель; ← #890,#887); B2 #891 (подключение) → B4 #893 (docs; ← #891,#892).
+  - Корни, готовые к старту: **A0 #884, B1 #890, B2 #891**.
 - **ADR обязателен** (не «проверить»): mini-ADR или amendment к ADR-0009/0013 — `planned_at`/`actual_at` меняют публичную модель WorkItem/Goal + datetime-канон UTC.
-- Видимость календарей = `selected` в `calendar_sources` (единый source-of-truth), не отдельный файл.
+- Видимость календарей = `visible_on_roadmap` в `calendar_sources`; `selected` остаётся только sync inclusion.
 - Tech-stack — только существующие bricks, без новых: SQLite+WAL (#3), React island ADR-0013, MD3/Design-system (#6/#10), Google Calendar brick (google-api-python-client, read-only), keyring/restricted-file secrets. Свериться с `_engineering_rules/tech-stack-choices.md` при старте.
+
+## Pre-close retrospective (2026-06-12)
+- Tech-stack choices: `no-change` — использованы существующие bricks: SQLite+WAL, React/Vite island, MD3/Design-system, Google Calendar read-only sync, keyring/restricted-file secrets.
+- Design-system: `no-change` — новые controls остаются на Material Web/MD3 токенах; отдельный design-system brick не требуется.
+- Skills: `no-change` — применены central-plan-workflow, pm-mcp-task-flow, ai-memory, impeccable/frontend-verification; нового skill не требуется.
+- Hooks: `no-change` — существующий task_state hook потребовал синхронизации активной PM-MCP задачи, изменений hook-контракта не требуется.
+- Plan closure: #884-#893 закрыты в PM-MCP, итог записан в AI-memory (`pm-mcp-server` #1679, `assistant-ui` #1680), архитектурное решение оформлено в ADR-0022 и документации, уникальные acceptance criteria перенесены в код/тесты/docs.
